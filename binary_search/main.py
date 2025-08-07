@@ -7,8 +7,9 @@ NUM_VECS = 10000
 NUM_QUERIES = 100
 NUM_DIMS=1536
 TOP_K=10
+PCA_FACTOR=0
 OVER_SAMPLE_FACTOR=[i for i in range(1,11,1)]
-CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}.csv"
+CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_PCA_{PCA_FACTOR}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
     "openai": {
@@ -90,6 +91,33 @@ def recall_at_k(ref: np.ndarray, test: np.ndarray):
     recalls=np.array(recalls)
     return round(recalls.mean(),3)
 
+def pca_reduce(docs: np.ndarray, queries: np.ndarray, factor: int):
+    '''
+    Simple NumPy routine to perform PCA on a batch of docs, and then the same transformation on the batch of queries
+    '''
+    if factor <= 0:
+        raise ValueError("factor must be a positive integer")
+
+    original_dim = docs.shape[1]
+    new_dim = original_dim // factor
+    if new_dim < 1:
+        raise ValueError("factor is too large; resulting dimension is < 1")
+
+    mean = docs.mean(axis=0, keepdims=True)
+    docs_c = docs - mean
+    queries_c = queries - mean
+
+    docs_c = docs_c.astype(np.float32, copy=True)
+    queries_c = queries_c.astype(np.float32, copy=True)
+
+    _, _, Vt = np.linalg.svd(docs_c, full_matrices=False)
+
+    components = Vt[:new_dim]
+    docs_red = docs_c @ components.T
+    queries_red = queries_c @ components.T
+
+    return docs_red, queries_red
+
 def load_embeddings(path: str, col: str, dim: int):
     df = (
         pl.scan_parquet(path)
@@ -120,15 +148,23 @@ def main():
     num_vecs=[]
     times=[]
     b_times=[]
+    r_times=[]
+
     recall=[]
+    r_recall=[]
+
     o_sample=[]
     hamming_warm_run()
     for prov, meta in PROVIDERS.items():
         docs, queries = load_embeddings(meta["path"], meta["col"], meta["dim"])
 
-        docs_b=binary_quantize_batch(docs)
-
-        queries_b=binary_quantize_batch(queries)
+        if PCA_FACTOR>0:
+            docs_r, queries_r = pca_reduce(docs,queries,PCA_FACTOR)
+            docs_b=binary_quantize_batch(docs_r)
+            queries_b=binary_quantize_batch(queries_r)
+        else:
+            docs_b=binary_quantize_batch(docs)
+            queries_b=binary_quantize_batch(queries)
 
         start_time=time.time_ns()
         idxs = vector_search(queries, docs, TOP_K)
@@ -145,18 +181,32 @@ def main():
             b_idxs = binary_vector_search(queries_b, docs_b, TOP_K*o)
             end_time=time.time_ns()
             b_times.append((end_time-start_time)*1.0/1e6)
+
+            if PCA_FACTOR>0:
+                start_time=time.time_ns()
+                r_idxs=vector_search(queries_r, docs_r,TOP_K*o)
+                end_time=time.time_ns()
+                r_times.append((end_time-start_time)*1.0/1e6)
+                r=recall_at_k(idxs, r_idxs)
+                r_recall.append(r)
+            else:
+                r_times.append(0)
+                r_recall.append(0)
         
             r=recall_at_k(idxs, b_idxs)
             recall.append(r)
-        
+
+            
         print("Done with",prov)
 
     pl.DataFrame({
         "provider": providers,
         "num_vecs": num_vecs,
+        "oversample": o_sample,
         "brute time (ms)": times,
+        "reduced time (ms)":r_times,
         "binary time (ms)": b_times,
-        "binary oversample": o_sample,
+        "reduced vec. recall":r_recall,
         "binary recall": recall}).write_csv(CSV_PATH)
 
 if __name__ == "__main__":
