@@ -1,13 +1,15 @@
 import polars as pl
 import numpy as np
 from typing import Optional
+import time
 
 NUM_VECS = 10_000
 NUM_QUERIES = 1000
-TOP_K = 100
-PCA_FACTORS = [4]
+TOP_K = 10
+PCA_FACTORS = [4,8,16,32]
 DTYPES = ["fp32", "fp16"]
 OUT_CSV = f"benchmark_results_k_{TOP_K}.csv"
+TIME_CSV = f"query_times_k_{TOP_K}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
     "openai": {
@@ -131,10 +133,10 @@ for dt in DTYPES:
     for pf in PCA_FACTORS:
         VARIANTS.append((f"pca{pf}_{dt}", {"pca": pf, "dtype": dt, "q8": False}))
 # int8 variants
-for dt in DTYPES:
-    VARIANTS.append((f"int8_{dt}", {"pca": None, "dtype": dt, "q8": True}))
-    for pf in PCA_FACTORS:
-        VARIANTS.append((f"int8_pca{pf}_{dt}", {"pca": pf, "dtype": dt, "q8": True}))
+# for dt in DTYPES:
+#     VARIANTS.append((f"int8_{dt}", {"pca": None, "dtype": dt, "q8": True}))
+#     for pf in PCA_FACTORS:
+#         VARIANTS.append((f"int8_pca{pf}_{dt}", {"pca": pf, "dtype": dt, "q8": True}))
 
 def load_embeddings(path: str, col: str, dim: int):
     df = (
@@ -152,22 +154,32 @@ def benchmark():
         name: {"variant": name, **{p: None for p in PROVIDERS}} for name, _ in VARIANTS
     }
 
+    query_times: dict[str, dict[str, float]] = {
+        name: {"variant": name, **{p: None for p in PROVIDERS}} for name, _ in VARIANTS
+    }
+
     for prov, meta in PROVIDERS.items():
         docs_fp32, queries_fp32 = load_embeddings(meta["path"], meta["col"], meta["dim"])
         ref_idxs, _ = vector_search(queries_fp32, docs_fp32, TOP_K)
 
         for name, cfg in VARIANTS:
             d, q = apply_variant(docs_fp32, queries_fp32, cfg["pca"], cfg["dtype"], cfg["q8"])
+            start_time=time.time_ns()
             idxs, _ = vector_search(q, d, TOP_K)
+            end_time=time.time_ns()
             scores[name][prov] = recall_at_k(ref_idxs, idxs)
+            query_times[name][prov] = (end_time-start_time)*1.0/1e6
 
     rows = list(scores.values())
-    return pl.DataFrame(rows).sort("variant")
+    times = list(query_times.values())
+    return pl.DataFrame(rows).sort("variant"), pl.DataFrame(times).sort("variant")
 
 def main():
-    df = benchmark()
+    df, times = benchmark()
     df.write_csv(OUT_CSV)
+    times.write_csv(TIME_CSV)
     print(df)
+    print(times)
 
 if __name__ == "__main__":
     main()

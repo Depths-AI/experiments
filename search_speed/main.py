@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import time
 
-NUM_VECS = [100,1_000,10_000,100_000]
+NUM_VECS = [10_000*i for i in range(1,11,1)]
 NUM_QUERIES = 1
 NUM_DIMS=1536
 CSV_PATH=f"search_speed_{NUM_QUERIES}_{NUM_DIMS}.csv"
