@@ -1,13 +1,13 @@
 import numpy as np
 import polars as pl
 import time
-from search import batch_hamming
+from search import *
 
 NUM_VECS = 10000
 NUM_QUERIES = 100
 NUM_DIMS=1536
 TOP_K=10
-PCA_FACTOR=2
+PCA_FACTOR=4
 OVER_SAMPLE_FACTOR=[i for i in range(1,11,1)]
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_PCA_{PCA_FACTOR}.csv"
 
@@ -64,19 +64,11 @@ def vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int=10):
 
 def binary_vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int = 10):
     '''
-    Optimal NumPy+Numba routine to perform binary search for a batch of queries using popcount hamming distance.
+    Optimal NumPy+Numba routine using a single unified kernel.
     '''
-    distances=np.zeros((NUM_VECS,NUM_QUERIES))
-    distances=batch_hamming(docs,queries,distances)
-    
-    k = min(top_k, distances.shape[0])
-    
-    top = np.argpartition(distances, k - 1, axis=0)[:k]
-    
-    top_distances = np.take_along_axis(distances, top, axis=0)
-    order = np.argsort(top_distances, axis=0)
-    
-    idxs = np.take_along_axis(top, order, axis=0).T
+    k = min(top_k, docs.shape[0])
+    # The entire search logic is now inside this one call
+    idxs = binary_search_kernel(docs, queries, k)
     return idxs
 
 def recall_at_k(ref: np.ndarray, test: np.ndarray):
@@ -113,7 +105,6 @@ def pca_reduce(docs: np.ndarray, queries: np.ndarray, factor: int):
     _, _, Vt = np.linalg.svd(docs_c, full_matrices=False)
 
     components = Vt[:new_dim]
-    print(components.shape[0]*components.shape[1]*2.0/1e6)
     docs_red = docs_c @ components.T
     queries_red = queries_c @ components.T
 
@@ -141,8 +132,7 @@ def hamming_warm_run():
     q=np.packbits(bits, axis=-1)
     q=q.view(np.uint64)
 
-    distances=np.zeros((10,NUM_QUERIES))
-    distances=batch_hamming(d,q,distances)
+    ids=binary_search_kernel(d,q,1)
 
 def main():
     providers=[]
