@@ -6,7 +6,7 @@ import time
 NUM_VECS=10_000
 NUM_QUERIES=100
 K=100
-TOP_C=10
+TOP_C=30
 TOP_K=10
 NUM_DIMS=1536
 PROVIDERS: dict[str, dict[str, object]] = {

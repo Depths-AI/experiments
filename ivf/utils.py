@@ -18,7 +18,7 @@ def compute_kmeans(X: np.ndarray, K: int, **kwargs):
     closest_indices, _ = pairwise_distances_argmin_min(centroids, X)
     representatives = X[closest_indices]
 
-    return representatives, labels
+    return centroids, labels
 
 def search_centroids(queries: np.ndarray, centroids: np.ndarray, top_c: int):
     dists = np.sum((queries[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
