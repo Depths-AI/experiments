@@ -3,13 +3,14 @@ import polars as pl
 import time
 from search import batch_hamming
 
-NUM_VECS = 10000
+NUM_VECS = 20000
 NUM_QUERIES = 100
 NUM_DIMS=1536
 TOP_K=10
-PCA_FACTOR=2
+PCA_FACTOR=0
 OVER_SAMPLE_FACTOR=[i for i in range(1,11,1)]
-CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_PCA_{PCA_FACTOR}.csv"
+N_BITS=512
+CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_LSH_{N_BITS}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
     "openai": {
@@ -25,11 +26,11 @@ PROVIDERS: dict[str, dict[str, object]] = {
 }
 
 
-def binary_quantize_batch(vectors: np.ndarray, seed: int = 0):
+def lsh_quantize_batch(vectors: np.ndarray,n_bits=128, seed: int = 0):
     _, dims = vectors.shape
 
     rng = np.random.default_rng(seed)
-    A = rng.standard_normal((dims, dims))
+    A = rng.standard_normal((dims, n_bits))
     Q, _ = np.linalg.qr(A, mode="reduced")
 
     projections = vectors @ Q
@@ -37,8 +38,6 @@ def binary_quantize_batch(vectors: np.ndarray, seed: int = 0):
 
     bin_signs=np.where(bits_bool,  1.0, -1.0)
     bit_norms= np.linalg.norm(bin_signs, axis=1)
-
-    errors=np.divide((np.linalg.norm(projections - bin_signs, axis=1)),bit_norms)
 
     bits = bits_bool.astype(np.bool)
     packed= np.packbits(bits, axis=-1)
@@ -113,7 +112,6 @@ def pca_reduce(docs: np.ndarray, queries: np.ndarray, factor: int):
     _, _, Vt = np.linalg.svd(docs_c, full_matrices=False)
 
     components = Vt[:new_dim]
-    print(components.shape[0]*components.shape[1]*2.0/1e6)
     docs_red = docs_c @ components.T
     queries_red = queries_c @ components.T
 
@@ -161,11 +159,11 @@ def main():
 
         if PCA_FACTOR>0:
             docs_r, queries_r = pca_reduce(docs,queries,PCA_FACTOR)
-            docs_b=binary_quantize_batch(docs_r)
-            queries_b=binary_quantize_batch(queries_r)
+            docs_b=lsh_quantize_batch(docs_r,N_BITS)
+            queries_b=lsh_quantize_batch(queries_r,N_BITS)
         else:
-            docs_b=binary_quantize_batch(docs)
-            queries_b=binary_quantize_batch(queries)
+            docs_b=lsh_quantize_batch(docs,N_BITS)
+            queries_b=lsh_quantize_batch(queries,N_BITS)
 
         start_time=time.time_ns()
         idxs = vector_search(queries, docs, TOP_K)
@@ -206,9 +204,9 @@ def main():
         "oversample": o_sample,
         "brute time (ms)": times,
         "reduced time (ms)":r_times,
-        "binary time (ms)": b_times,
+        "lsh time (ms)": b_times,
         "reduced vec. recall":r_recall,
-        "binary recall": recall}).write_csv(CSV_PATH)
+        "lsh recall": recall}).write_csv(CSV_PATH)
 
 if __name__ == "__main__":
     main()
