@@ -1,15 +1,16 @@
 import numpy as np
 import polars as pl
 import time
-from search import batch_hamming
+from search import *
 
-NUM_VECS = 20000
+NUM_VECS = 10000
 NUM_QUERIES = 100
 NUM_DIMS=1536
 TOP_K=10
 PCA_FACTOR=0
-OVER_SAMPLE_FACTOR=[i for i in range(1,11,1)]
-N_BITS=512
+OVER_SAMPLE_FACTOR=[1]
+OVER_SAMPLE_FACTOR.extend([i for i in range(5,101,5)])
+N_BITS=64
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_LSH_{N_BITS}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
@@ -19,9 +20,9 @@ PROVIDERS: dict[str, dict[str, object]] = {
         "dim": 1536,
     },
     "cohere": {
-        "path": "cohere.parquet", # Download and rename the first file from huggingface link in the article/ README
+        "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
-        "dim": 768,
+        "dim": 1024,
     },
 }
 
@@ -42,6 +43,7 @@ def lsh_quantize_batch(vectors: np.ndarray,n_bits=128, seed: int = 0):
     bits = bits_bool.astype(np.bool)
     packed= np.packbits(bits, axis=-1)
     packed= packed.view(np.uint64)
+    print(packed.shape)
     return packed
 
 def vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int=10):
@@ -63,19 +65,11 @@ def vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int=10):
 
 def binary_vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int = 10):
     '''
-    Optimal NumPy+Numba routine to perform binary search for a batch of queries using popcount hamming distance.
+    Optimal NumPy+Numba routine using a single unified kernel.
     '''
-    distances=np.zeros((NUM_VECS,NUM_QUERIES))
-    distances=batch_hamming(docs,queries,distances)
-    
-    k = min(top_k, distances.shape[0])
-    
-    top = np.argpartition(distances, k - 1, axis=0)[:k]
-    
-    top_distances = np.take_along_axis(distances, top, axis=0)
-    order = np.argsort(top_distances, axis=0)
-    
-    idxs = np.take_along_axis(top, order, axis=0).T
+    k = min(top_k, docs.shape[0])
+    # The entire search logic is now inside this one call
+    idxs = binary_search_kernel(docs, queries, k)
     return idxs
 
 def recall_at_k(ref: np.ndarray, test: np.ndarray):
@@ -139,8 +133,7 @@ def hamming_warm_run():
     q=np.packbits(bits, axis=-1)
     q=q.view(np.uint64)
 
-    distances=np.zeros((10,NUM_QUERIES))
-    distances=batch_hamming(d,q,distances)
+    ds=binary_search_kernel(d,q,1)
 
 def main():
     providers=[]

@@ -1,27 +1,25 @@
 from sklearn.cluster import KMeans
-from sklearn.metrics import pairwise_distances_argmin_min
 import numpy as np
 
-def compute_kmeans(X: np.ndarray, K: int, **kwargs):
+def compute_cluster(X: np.ndarray, K: int, **kwargs):
     """
     Perform KMeans clustering on X and return:
     - centroids: (K, D) ndarray
     - labels: (N,) ndarray of centroid indices for each sample
-    - representatives: (K, D) ndarray of the closest data point to each centroid
     """
+    #X=X-X.mean(axis=0)
     kmeans = KMeans(n_clusters=K, **kwargs)
     kmeans.fit(X)
     centroids = kmeans.cluster_centers_
     labels = kmeans.labels_
 
-    # Find indices of data points closest to each centroid
-    closest_indices, _ = pairwise_distances_argmin_min(centroids, X)
-    representatives = X[closest_indices]
-
+    centroids=centroids/(np.linalg.norm(centroids))
+    
     return centroids, labels
 
 def search_centroids(queries: np.ndarray, centroids: np.ndarray, top_c: int):
     dists = np.sum((queries[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+
     return np.argsort(dists, axis=1)[:, :top_c]
 
 def filter_docs_by_query(doc_vectors: np.ndarray,
@@ -101,3 +99,30 @@ def proportion_in_filtered(brute_indices: np.ndarray,
         proportions[q] = count / top_k
 
     return proportions
+
+def pca_reduce(docs: np.ndarray, queries: np.ndarray, factor: int):
+    '''
+    Simple NumPy routine to perform PCA on a batch of docs, and then the same transformation on the batch of queries
+    '''
+    if factor <= 0:
+        raise ValueError("factor must be a positive integer")
+
+    original_dim = docs.shape[1]
+    new_dim = original_dim // factor
+    if new_dim < 1:
+        raise ValueError("factor is too large; resulting dimension is < 1")
+
+    mean = docs.mean(axis=0, keepdims=True)
+    docs_c = docs - mean
+    queries_c = queries - mean
+
+    docs_c = docs_c.astype(np.float32, copy=True)
+    queries_c = queries_c.astype(np.float32, copy=True)
+
+    _, _, Vt = np.linalg.svd(docs_c, full_matrices=False)
+
+    components = Vt[:new_dim]
+    docs_red = docs_c @ components.T
+    queries_red = queries_c @ components.T
+
+    return docs_red, queries_red

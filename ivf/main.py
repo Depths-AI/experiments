@@ -5,8 +5,8 @@ import time
 
 NUM_VECS=10_000
 NUM_QUERIES=100
-K=100
-TOP_C=30
+K=500
+TOP_C=50
 TOP_K=10
 NUM_DIMS=1536
 PROVIDERS: dict[str, dict[str, object]] = {
@@ -16,9 +16,9 @@ PROVIDERS: dict[str, dict[str, object]] = {
         "dim": 1536,
     },
     "cohere": {
-        "path": "cohere.parquet", # Download and rename the first file from huggingface link in the article/ README
+        "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
-        "dim": 768,
+        "dim": 1024,
     },
 }
 
@@ -30,16 +30,19 @@ def load_embeddings(path: str, col: str, dim: int):
         .with_columns(pl.col(col).cast(pl.Array(pl.Float32, dim)).alias("vec"))
     )
     docs = df.head(NUM_VECS)["vec"].to_numpy()
+    docs = docs/(np.linalg.norm(docs))
     queries = df.tail(NUM_QUERIES)["vec"].to_numpy()
+    queries = queries/(np.linalg.norm(queries))
+
     return docs, queries
 
 def main():
 
     for prov, meta in PROVIDERS.items():
         docs, queries = load_embeddings(meta["path"], meta["col"], meta["dim"])
-
+        
         start_time=time.time_ns()
-        centroids, labels = compute_kmeans(docs, K=K, max_iter=1000)
+        centroids, labels = compute_cluster(docs, K=K, max_iter=1000)
         end_time=time.time_ns()
         print("KMeans time (ms):",(end_time-start_time)*1.0/1e6)
 

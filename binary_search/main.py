@@ -8,7 +8,8 @@ NUM_QUERIES = 100
 NUM_DIMS=1536
 TOP_K=10
 PCA_FACTOR=4
-OVER_SAMPLE_FACTOR=[i for i in range(1,11,1)]
+OVER_SAMPLE_FACTOR=[1]
+OVER_SAMPLE_FACTOR.extend([i for i in range(5,51,5)])
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_PCA_{PCA_FACTOR}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
@@ -18,9 +19,9 @@ PROVIDERS: dict[str, dict[str, object]] = {
         "dim": 1536,
     },
     "cohere": {
-        "path": "cohere.parquet", # Download and rename the first file from huggingface link in the article/ README
+        "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
-        "dim": 768,
+        "dim": 1024,
     },
 }
 
@@ -148,7 +149,7 @@ def main():
     hamming_warm_run()
     for prov, meta in PROVIDERS.items():
         docs, queries = load_embeddings(meta["path"], meta["col"], meta["dim"])
-
+        
         if PCA_FACTOR>0:
             docs_r, queries_r = pca_reduce(docs,queries,PCA_FACTOR)
             docs_b=binary_quantize_batch(docs_r)

@@ -36,3 +36,51 @@ def batch_hamming(docs, queries, out):
             out[i, j] = s
 
     return out
+
+@njit(parallel=True, nogil=True, cache=True)
+def binary_search_kernel(docs, queries, k):
+    """
+    A unified Numba kernel that computes distances and finds top-k
+    results simultaneously, avoiding a large intermediate distance matrix.
+    """
+    Q, D, W = queries.shape[0], docs.shape[0], docs.shape[1]
+
+    # Pre-allocate final output arrays for indices and distances
+    # Shape: (num_queries, k)
+    top_k_indices = np.full((Q, k), -1, dtype=np.int64)
+    top_k_distances = np.full((Q, k), np.iinfo(np.uint64).max, dtype=np.uint64)
+
+    # Parallelize over queries
+    for j in prange(Q):
+        q_vec = queries[j]
+        
+        # These are temporary buffers for the current query's top-k
+        current_top_indices = top_k_indices[j]
+        current_top_distances = top_k_distances[j]
+        
+        # Iterate over all documents for the current query
+        for i in range(D):
+            # 1. Calculate Hamming Distance
+            dist = np.uint64(0)
+            for w in range(W):
+                dist += popcount_u64(docs[i, w] ^ q_vec[w])
+
+            # 2. Perform Top-K selection (like a manual argpartition)
+            # Find the largest distance currently in our top-k list
+            if dist < current_top_distances[-1]:
+                # If the new distance is smaller, we need to insert it
+                # and keep the list sorted.
+                
+                # Find insertion point
+                insertion_point = np.searchsorted(current_top_distances, dist)
+                
+                # Shift elements to the right to make space
+                for idx in range(k - 1, insertion_point, -1):
+                    current_top_distances[idx] = current_top_distances[idx-1]
+                    current_top_indices[idx] = current_top_indices[idx-1]
+                
+                # Insert the new distance and index
+                current_top_distances[insertion_point] = dist
+                current_top_indices[insertion_point] = i
+
+    return top_k_indices

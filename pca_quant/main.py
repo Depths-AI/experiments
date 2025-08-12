@@ -4,9 +4,9 @@ from typing import Optional
 import time
 
 NUM_VECS = 10_000
-NUM_QUERIES = 1000
+NUM_QUERIES = 100
 TOP_K = 10
-PCA_FACTORS = [4,8,16,32]
+PCA_FACTORS = [4]
 DTYPES = ["fp32", "fp16"]
 OUT_CSV = f"benchmark_results_k_{TOP_K}.csv"
 TIME_CSV = f"query_times_k_{TOP_K}.csv"
@@ -18,9 +18,9 @@ PROVIDERS: dict[str, dict[str, object]] = {
         "dim": 1536,
     },
     "cohere": {
-        "path": "cohere.parquet", # Download and rename the first file from huggingface link in the article/ README
+        "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
-        "dim": 768,
+        "dim": 1024,
     },
 }
 
@@ -133,10 +133,10 @@ for dt in DTYPES:
     for pf in PCA_FACTORS:
         VARIANTS.append((f"pca{pf}_{dt}", {"pca": pf, "dtype": dt, "q8": False}))
 # int8 variants
-# for dt in DTYPES:
-#     VARIANTS.append((f"int8_{dt}", {"pca": None, "dtype": dt, "q8": True}))
-#     for pf in PCA_FACTORS:
-#         VARIANTS.append((f"int8_pca{pf}_{dt}", {"pca": pf, "dtype": dt, "q8": True}))
+for dt in DTYPES:
+    VARIANTS.append((f"int8_{dt}", {"pca": None, "dtype": dt, "q8": True}))
+    for pf in PCA_FACTORS:
+        VARIANTS.append((f"int8_pca{pf}_{dt}", {"pca": pf, "dtype": dt, "q8": True}))
 
 def load_embeddings(path: str, col: str, dim: int):
     df = (
