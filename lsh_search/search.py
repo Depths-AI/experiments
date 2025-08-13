@@ -1,8 +1,9 @@
 import numpy as np
 from numba import njit, prange
 from numba.extending import register_jitable
+from heap import heap_push, heap_replace
 
-@register_jitable(inline='always')
+@njit(nogil=True,cache=True)
 def popcount_u64(x):
     """
     SWAR popcount on a uint64 value:
@@ -16,26 +17,6 @@ def popcount_u64(x):
     x = (x + (x >> np.uint64(4))) & np.uint64(0x0F0F0F0F0F0F0F0F)
     # Stage 4: accumulate into top byte
     return (x * np.uint64(0x0101010101010101)) >> np.uint64(56)
-
-@njit(parallel=True, nogil=True)
-def batch_hamming(docs, queries, out):
-    """
-    Compute pairwise Hamming distances between
-    docs and queries, both uint64-packed arrays.
-    docs: shape (n_docs, n_words)
-    queries: shape (n_queries, n_words)
-    out: pre-allocated array (n_docs, n_queries)
-    """
-    D, Q, W = docs.shape[0], queries.shape[0], docs.shape[1]
-    for i in prange(D):
-        for j in range(Q):
-            s = np.uint64(0)
-            for w in range(W):
-                # XOR then popcount, inlined via register_jitable
-                s += popcount_u64(docs[i, w] ^ queries[j, w])
-            out[i, j] = s
-
-    return out
 
 @njit(parallel=True, nogil=True, cache=True)
 def binary_search_kernel(docs, queries, k):
@@ -58,29 +39,30 @@ def binary_search_kernel(docs, queries, k):
         current_top_indices = top_k_indices[j]
         current_top_distances = top_k_distances[j]
         
-        # Iterate over all documents for the current query
-        for i in range(D):
-            # 1. Calculate Hamming Distance
+        # --- Top-K selection using a Max-Heap ---
+        
+        # 1. Fill the heap with the first k documents
+        for i in range(k):
             dist = np.uint64(0)
             for w in range(W):
                 dist += popcount_u64(docs[i, w] ^ q_vec[w])
+            heap_push(current_top_distances, current_top_indices, dist, i)
 
-            # 2. Perform Top-K selection (like a manual argpartition)
-            # Find the largest distance currently in our top-k list
-            if dist < current_top_distances[-1]:
-                # If the new distance is smaller, we need to insert it
-                # and keep the list sorted.
-                
-                # Find insertion point
-                insertion_point = np.searchsorted(current_top_distances, dist)
-                
-                # Shift elements to the right to make space
-                for idx in range(k - 1, insertion_point, -1):
-                    current_top_distances[idx] = current_top_distances[idx-1]
-                    current_top_indices[idx] = current_top_indices[idx-1]
-                
-                # Insert the new distance and index
-                current_top_distances[insertion_point] = dist
-                current_top_indices[insertion_point] = i
+        # 2. For the rest of the documents, if a distance is smaller than the
+        #    largest distance in the heap, replace it.
+        for i in range(k, D):
+            dist = np.uint64(0)
+            for w in range(W):
+                dist += popcount_u64(docs[i, w] ^ q_vec[w])
+            
+            # If the new distance is smaller than the largest in the heap
+            if dist < current_top_distances[0]:
+                heap_replace(current_top_distances, current_top_indices, dist, i)
+
+    # Sort the results by distance for each query before returning
+    for j in range(Q):
+        sorted_indices = np.argsort(top_k_distances[j])
+        top_k_distances[j] = top_k_distances[j][sorted_indices]
+        top_k_indices[j] = top_k_indices[j][sorted_indices]
 
     return top_k_indices

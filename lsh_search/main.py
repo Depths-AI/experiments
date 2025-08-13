@@ -3,22 +3,21 @@ import polars as pl
 import time
 from search import *
 
-NUM_VECS = 10000
-NUM_QUERIES = 100
+NUM_VECS = 500000
+NUM_QUERIES = 1
 NUM_DIMS=1536
 TOP_K=10
 PCA_FACTOR=0
-OVER_SAMPLE_FACTOR=[1]
-OVER_SAMPLE_FACTOR.extend([i for i in range(5,101,5)])
-N_BITS=64
+OVER_SAMPLE_FACTOR=[10*i for i in range(1,11,1)]
+N_BITS=1024
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_LSH_{N_BITS}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
-    "openai": {
-        "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
-        "col": "text-embedding-3-large-1536-embedding",
-        "dim": 1536,
-    },
+    # "openai": {
+    #     "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
+    #     "col": "text-embedding-3-large-1536-embedding",
+    #     "dim": 1536,
+    # },
     "cohere": {
         "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
@@ -43,7 +42,6 @@ def lsh_quantize_batch(vectors: np.ndarray,n_bits=128, seed: int = 0):
     bits = bits_bool.astype(np.bool)
     packed= np.packbits(bits, axis=-1)
     packed= packed.view(np.uint64)
-    print(packed.shape)
     return packed
 
 def vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int=10):
@@ -149,6 +147,8 @@ def main():
     hamming_warm_run()
     for prov, meta in PROVIDERS.items():
         docs, queries = load_embeddings(meta["path"], meta["col"], meta["dim"])
+        # docs=np.random.random(size=(NUM_VECS, meta["dim"]))
+        # queries=np.random.random(size=(NUM_QUERIES, meta["dim"]))
 
         if PCA_FACTOR>0:
             docs_r, queries_r = pca_reduce(docs,queries,PCA_FACTOR)
