@@ -2,16 +2,19 @@ from numba import njit
 import numpy as np
 
 @njit(nogil=True)
-def heap_push(heap_distances, heap_indices, dist, index, pos):
+def heap_push(heap_distances, heap_indices, dist, index):
     """
-    Pushes a new item onto the max-heap at a specific position and sifts up.
+    Pushes a new item onto the max-heap.
     The heap is represented by two arrays: one for distances and one for indices.
     """
+    k = heap_distances.shape[0]
+    
     # Add the new item to the end of the heap
-    heap_distances[pos] = dist
-    heap_indices[pos] = index
+    heap_distances[k] = dist
+    heap_indices[k] = index
     
     # Sift up to maintain the heap property
+    pos = k
     while pos > 0:
         parent_pos = (pos - 1) // 2
         if heap_distances[pos] > heap_distances[parent_pos]:

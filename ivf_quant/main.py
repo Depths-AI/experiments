@@ -4,8 +4,8 @@ from utils import *
 import time
 
 NUM_VECS=10_000
-NUM_QUERIES=100
-K=500
+NUM_QUERIES=1
+K=1000
 TOP_C=10
 TOP_K=10
 NUM_DIMS=1536
@@ -37,7 +37,7 @@ def load_embeddings(path: str, col: str, dim: int):
     return docs, queries
 
 def main():
-
+    hamming_warm_run()
     for prov, meta in PROVIDERS.items():
         docs, queries = load_embeddings(meta["path"], meta["col"], meta["dim"])
         
@@ -47,12 +47,20 @@ def main():
         print("KMeans time (ms):",(end_time-start_time)*1.0/1e6)
 
         brute_f_results=vector_search(queries,docs,TOP_K)
-        
-        closest_centroids=search_centroids(queries,centroids,TOP_C)
-        top_vecs, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids)
 
-        recall_centroid=proportion_in_filtered(brute_f_results,top_vecs_id)
-        print("Recall@10 at centroid filter level:",recall_centroid.mean())
+        queries_b=binary_quantize_batch(queries)
+        centroids_b=binary_quantize_batch(centroids)
+        print(centroids_b.shape)
+        
+        #closest_centroids=search_centroids(queries,centroids,TOP_C)
+
+        for c in range(TOP_C, 51*TOP_C, TOP_C):
+            closest_centroids=binary_vector_search(queries_b,centroids_b,c)
+            print(closest_centroids.shape)
+            top_vecs, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids)
+
+            recall_centroid=proportion_in_filtered(brute_f_results,top_vecs_id)
+            print(f"Recall@10 at centroid filter level for TOP C={c}:",recall_centroid.mean())
 
 
 

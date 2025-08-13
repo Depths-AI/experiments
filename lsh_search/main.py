@@ -4,12 +4,12 @@ import time
 from search import *
 
 NUM_VECS = 500000
-NUM_QUERIES = 1
+NUM_QUERIES = 100
 NUM_DIMS=1536
 TOP_K=10
 PCA_FACTOR=0
 OVER_SAMPLE_FACTOR=[10*i for i in range(1,11,1)]
-N_BITS=1024
+N_BITS=256
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_LSH_{N_BITS}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
@@ -150,19 +150,19 @@ def main():
         # docs=np.random.random(size=(NUM_VECS, meta["dim"]))
         # queries=np.random.random(size=(NUM_QUERIES, meta["dim"]))
 
-        if PCA_FACTOR>0:
-            docs_r, queries_r = pca_reduce(docs,queries,PCA_FACTOR)
-            docs_b=lsh_quantize_batch(docs_r,N_BITS)
-            queries_b=lsh_quantize_batch(queries_r,N_BITS)
-        else:
-            docs_b=lsh_quantize_batch(docs,N_BITS)
-            queries_b=lsh_quantize_batch(queries,N_BITS)
-
         start_time=time.time_ns()
         idxs = vector_search(queries, docs, TOP_K)
         end_time=time.time_ns()
         bfs_time=(end_time-start_time)*1.0/1e6
         times.extend([bfs_time]*len(OVER_SAMPLE_FACTOR))
+
+        if PCA_FACTOR>0:
+            docs_r, queries_r = pca_reduce(docs,queries,PCA_FACTOR)
+            docs=lsh_quantize_batch(docs_r,N_BITS)
+            queries=lsh_quantize_batch(queries_r,N_BITS)
+        else:
+            docs=lsh_quantize_batch(docs,N_BITS)
+            queries=lsh_quantize_batch(queries,N_BITS)
 
         for o in OVER_SAMPLE_FACTOR:
             num_vecs.append(NUM_VECS)
@@ -170,7 +170,7 @@ def main():
             o_sample.append(o)
 
             start_time=time.time_ns()
-            b_idxs = binary_vector_search(queries_b, docs_b, TOP_K*o)
+            b_idxs = binary_vector_search(queries, docs, TOP_K*o)
             end_time=time.time_ns()
             b_times.append((end_time-start_time)*1.0/1e6)
 

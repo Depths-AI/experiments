@@ -3,7 +3,7 @@ import polars as pl
 import time
 from search import *
 
-NUM_VECS = 500000
+NUM_VECS = 100
 NUM_QUERIES = 1
 NUM_DIMS=1536
 TOP_K=10
@@ -172,6 +172,7 @@ def main():
             b_idxs = binary_vector_search(queries_b, docs_b, TOP_K*o)
             end_time=time.time_ns()
             b_times.append((end_time-start_time)*1.0)
+            print(b_idxs)
 
             if PCA_FACTOR>0:
                 start_time=time.time_ns()
