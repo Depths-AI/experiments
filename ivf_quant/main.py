@@ -4,9 +4,10 @@ from utils import *
 import time
 
 NUM_VECS=10_000
+CHUNK_SIZE=10_000
 NUM_QUERIES=1
-K=1000
-TOP_C=10
+K=50
+TOP_C=1
 TOP_K=10
 NUM_DIMS=1536
 PROVIDERS: dict[str, dict[str, object]] = {

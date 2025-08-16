@@ -3,14 +3,15 @@ import polars as pl
 import time
 from search import *
 
-NUM_VECS = 500000
+NUM_VECS = 10000
 NUM_QUERIES = 100
+PROV="cohere"
 NUM_DIMS=1536
 TOP_K=10
 PCA_FACTOR=0
 OVER_SAMPLE_FACTOR=[10*i for i in range(1,11,1)]
 N_BITS=256
-CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_LSH_{N_BITS}.csv"
+CSV_PATH=f"search_speed_{TOP_K}_{PROV}_LSH_{N_BITS}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
     # "openai": {
@@ -167,7 +168,7 @@ def main():
         for o in OVER_SAMPLE_FACTOR:
             num_vecs.append(NUM_VECS)
             providers.append(prov)
-            o_sample.append(o)
+            o_sample.append(o*TOP_K)
 
             start_time=time.time_ns()
             b_idxs = binary_vector_search(queries, docs, TOP_K*o)
@@ -194,7 +195,7 @@ def main():
     pl.DataFrame({
         "provider": providers,
         "num_vecs": num_vecs,
-        "oversample": o_sample,
+        "vectors sampled": o_sample,
         "brute time (ms)": times,
         "reduced time (ms)":r_times,
         "lsh time (ms)": b_times,

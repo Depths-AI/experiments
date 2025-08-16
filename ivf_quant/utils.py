@@ -18,6 +18,23 @@ def compute_cluster(X: np.ndarray, K: int, **kwargs):
     
     return centroids, labels
 
+def rotated_compute_cluster(X: np.ndarray, K: int,Q:np.ndarray, **kwargs):
+    """
+    Perform KMeans clustering on X and return:
+    - centroids: (K, D) ndarray
+    - labels: (N,) ndarray of centroid indices for each sample
+    """
+    X = X @ Q
+    X = X.astype(np.float32, copy=True)
+    kmeans = KMeans(n_clusters=K, **kwargs)
+    kmeans.fit(X)
+    centroids = kmeans.cluster_centers_
+    labels = kmeans.labels_
+
+    centroids=centroids/(np.linalg.norm(centroids))
+    
+    return centroids, labels
+
 def search_centroids(queries: np.ndarray, centroids: np.ndarray, top_c: int):
     dists = np.sum((queries[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
 
@@ -57,12 +74,8 @@ def vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int=10):
     idxs = np.take_along_axis(top, order, axis=0).T
     return idxs
 
-def binary_quantize_batch(vectors: np.ndarray, seed: int = 0):
+def binary_quantize_batch(vectors: np.ndarray, Q:np.ndarray):
     _, dims = vectors.shape
-
-    rng = np.random.default_rng(seed)
-    A = rng.standard_normal((dims, dims))
-    Q, _ = np.linalg.qr(A, mode="reduced")
 
     projections = vectors @ Q
     bits_bool=projections>=0
@@ -100,6 +113,32 @@ def proportion_in_filtered(brute_indices: np.ndarray,
         proportions[q] = count / top_k
 
     return proportions
+
+def pca(docs: np.ndarray):
+    '''
+    Simple NumPy routine to perform PCA on a batch of docs
+    '''
+    original_dim = docs.shape[1]
+    mean = docs.mean(axis=0, keepdims=True)
+    docs_c = docs - mean
+
+    docs_c = docs_c.astype(np.float32, copy=True)
+
+    # To align the data with its principal components without reducing dimensionality,
+    # we need the eigenvectors of the covariance matrix.
+    # These eigenvectors form the rotation matrix.
+    covariance_matrix = np.cov(docs_c, rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+    
+    # Sort eigenvectors by eigenvalues in descending order
+    idx = np.argsort(eigenvalues)[::-1]
+    eigenvectors = eigenvectors[:, idx]
+
+    # The rotated data is the product of the centered data and the eigenvectors.
+    # This aligns the data with the principal axes.
+    docs_red = docs_c @ eigenvectors
+
+    return docs_red
 
 def pca_reduce(docs: np.ndarray, queries: np.ndarray, factor: int):
     '''
