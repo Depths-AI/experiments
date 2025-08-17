@@ -4,12 +4,12 @@ from utils import *
 import time
 
 NUM_VECS=100_000
-CHUNK_SIZE=10_000
-NUM_QUERIES=1
-K=100
-TOP_C=20
+CHUNK_SIZE=2_000
+NUM_QUERIES=100
+K=20
+TOP_C=50
 TOP_K=10
-NUM_DIMS=1536
+NUM_DIMS=1024
 PROVIDERS: dict[str, dict[str, object]] = {
     # "openai": {
     #     "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
@@ -83,19 +83,13 @@ def main():
 
         brute_f_results=vector_search(queries,docs,TOP_K)
         
-        for c in range(TOP_C, num_iterations*K+1, TOP_C):
-            closest_centroids=vector_search(queries,centroids,c)
-            _, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids)
-
-            recall_centroid=proportion_in_filtered(brute_f_results,top_vecs_id)
-            print(f"((Float centroids) Recall@10 at centroid filter level for TOP C={c}:",recall_centroid.mean())
 
         for c in range(TOP_C, num_iterations*K+1, TOP_C):
             closest_centroids=binary_vector_search(queries_b,centroids_b,c)
             _, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids)
 
             recall_centroid=proportion_in_filtered(brute_f_results,top_vecs_id)
-            print(f"((Binarized centroids) Recall@10 at centroid filter level for TOP C={c}:",recall_centroid.mean())
+            print(f"((Binarized centroids) Recall@10 at centroid filter level for TOP C={c}:",round(recall_centroid.mean(),3))
 
         print("All calculations done")
         
