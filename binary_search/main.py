@@ -3,20 +3,20 @@ import polars as pl
 import time
 from search import *
 
-NUM_VECS = 100
+NUM_VECS = 20000
 NUM_QUERIES = 1
-NUM_DIMS=1536
+NUM_DIMS=1024
 TOP_K=10
 PCA_FACTOR=0
-OVER_SAMPLE_FACTOR=[i for i in range(1,5,1)]
+OVER_SAMPLE_FACTOR=[i for i in range(5,6,1)]
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_PCA_{PCA_FACTOR}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
-    # "openai": {
-    #     "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
-    #     "col": "text-embedding-3-large-1536-embedding",
-    #     "dim": 1536,
-    # },
+    "openai": {
+        "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
+        "col": "text-embedding-3-large-1536-embedding",
+        "dim": 1536,
+    },
     "cohere": {
         "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
@@ -68,8 +68,8 @@ def binary_vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int = 10)
     '''
     k = min(top_k, docs.shape[0])
     # The entire search logic is now inside this one call
-    idxs = binary_search_kernel(docs, queries, k)
-    return idxs
+    idxs, dists = binary_search_kernel(docs, queries, k)
+    return idxs, dists
 
 def recall_at_k(ref: np.ndarray, test: np.ndarray):
     '''
@@ -169,10 +169,10 @@ def main():
             o_sample.append(o)
 
             start_time=time.time_ns()
-            b_idxs = binary_vector_search(queries_b, docs_b, TOP_K*o)
+            b_idxs, b_dists = binary_vector_search(queries_b, docs_b, TOP_K*o)
             end_time=time.time_ns()
             b_times.append((end_time-start_time)*1.0)
-            print(b_idxs)
+            print(b_dists)
 
             if PCA_FACTOR>0:
                 start_time=time.time_ns()
@@ -186,6 +186,7 @@ def main():
                 r_recall.append(0)
         
             r=recall_at_k(idxs, b_idxs)
+            print(f"Recall at {TOP_K*o} for {prov}: {r}")
             recall.append(r)
 
             

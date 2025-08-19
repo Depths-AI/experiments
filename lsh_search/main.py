@@ -4,12 +4,12 @@ import time
 from search import *
 
 NUM_VECS = 500000
-NUM_QUERIES = 100
+NUM_QUERIES = 10
 PROV="cohere"
 NUM_DIMS=1024
 TOP_K=10
 PCA_FACTOR=0
-OVER_SAMPLE_FACTOR=[100*i for i in range(1,101,1)]
+OVER_SAMPLE_FACTOR=[i for i in range(200,201,1)]
 N_BITS=128
 CSV_PATH=f"search_speed_{TOP_K}_{PROV}_LSH_{N_BITS}.csv"
 

@@ -1,6 +1,8 @@
 import numpy as np
 from search import *
+from typing import Optional
 from kcent_utils import greedy_k_center_indices, assign_labels_topL
+from binary_kcenter import hamming_greedy_k_center_indices,hamming_assign_labels_topL, hamming_refine_centers_majority
 
 def greedy_k_center(
     X: np.ndarray,
@@ -39,6 +41,40 @@ def greedy_k_center(
     centers_idx = greedy_k_center_indices(X, int(K), bool(normalized), int(start_index))
     labels = assign_labels_topL(X, centers_idx,num_centers, bool(normalized))
     centers = X[centers_idx].copy()  # materialize to decouple from X
+    return centers, labels, centers_idx
+
+def hamming_greedy_k_center(
+        X: np.ndarray,
+    K: int,
+    num_centers: int=1,
+    start_index: int = 0
+):
+    """
+    Greedy k-center clustering (Gonzalez).
+    Parameters
+    ----------
+    X : (N, D//64) array-like
+        Binarized bitpacked Document/embedding matrix.
+    K : int
+        Number of clusters (clamped to N).
+    start_index : int, default 0
+        Index of the initial center. Any index is valid with the 2-approx guarantee.
+    dtype : numpy dtype, default float32
+        X is cast to this dtype before clustering.
+
+    Returns
+    -------
+    centers : (K, D) ndarray
+        Selected centers (subset of X).
+    labels : (N,) ndarray of int64
+        Index into 0..K-1 for each row of X.
+    centers_idx : (K,) ndarray of int64
+        Indices into X for the chosen centers.
+    """
+    centers_idx = hamming_greedy_k_center_indices(X, int(K), int(start_index))
+    labels = hamming_assign_labels_topL(X, centers_idx,num_centers)
+    centers = X[centers_idx].copy()  # materialize to decouple from X
+    #centers= hamming_refine_centers_majority(X, centers_idx, labels)
     return centers, labels, centers_idx
 
 def search_centroids(queries: np.ndarray, centroids: np.ndarray, top_c: int):
@@ -82,20 +118,18 @@ def vector_search(queries: np.ndarray, docs: np.ndarray, top_k: int=10):
     idxs = np.take_along_axis(top, order, axis=0).T
     return idxs
 
-def binary_quantize_batch(vectors: np.ndarray, Q:np.ndarray):
+def binary_quantize_batch(vectors: np.ndarray, Q:Optional[np.ndarray]=None):
     _, dims = vectors.shape
 
+    if Q is None:
+        rng = np.random.default_rng(0)
+        A=rng.standard_normal((dims, dims))
+        Q, _ = np.linalg.qr(A, mode="reduced")
+    Q=np.ascontiguousarray(Q, dtype=np.float32)
+
     projections = vectors @ Q
-    bits_bool=projections>=0
 
-    bin_signs=np.where(bits_bool,  1.0, -1.0)
-    bit_norms= np.linalg.norm(bin_signs, axis=1)
-
-    errors=np.divide((np.linalg.norm(projections - bin_signs, axis=1)),bit_norms)
-
-    bits = bits_bool.astype(np.bool)
-    packed= np.packbits(bits, axis=-1)
-    packed= packed.view(np.uint64)
+    packed = pack_signs_to_uint64(projections)
     return packed
 
 def proportion_in_filtered(brute_indices: np.ndarray,
