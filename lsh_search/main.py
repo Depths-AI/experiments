@@ -3,14 +3,14 @@ import polars as pl
 import time
 from search import *
 
-NUM_VECS = 500000
+NUM_VECS = 100000
 NUM_QUERIES = 10
 PROV="cohere"
 NUM_DIMS=1024
 TOP_K=10
 PCA_FACTOR=0
-OVER_SAMPLE_FACTOR=[i for i in range(200,201,1)]
-N_BITS=128
+OVER_SAMPLE_FACTOR=[i for i in range(1000,1001,1)]
+N_BITS=64
 CSV_PATH=f"search_speed_{TOP_K}_{PROV}_LSH_{N_BITS}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {

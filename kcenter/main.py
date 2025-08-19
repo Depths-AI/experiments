@@ -3,14 +3,14 @@ import numpy as np
 from utils import *
 import time
 
-NUM_VECS=10_000
-CHUNK_SIZE=10_000
+NUM_VECS=32760
+CHUNK_SIZE=32760
 NUM_QUERIES=100
-K=500
-TOP_C=1
-MAX_C=5
+K=1024
+TOP_C=32
+MAX_C=32
 OVERSAMPLE_FACTOR=5
-L=[i for i in range(10, 11, 2)]  # Cluster redundancy levels
+L=[i for i in range(5, 6, 2)]  # Cluster redundancy levels
 TOP_K=10
 NUM_DIMS=1024
 PROVIDERS: dict[str, dict[str, object]] = {
@@ -89,12 +89,17 @@ def main():
 
             brute_f_results=vector_search(queries,docs,TOP_K)
             print("-"*50)
+            
 
             for c in range(TOP_C, MAX_C+1, TOP_C):
                 closest_centroids=binary_vector_search(queries_b,centroids,c)
                 _, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids)
+                proportions=[]
+                for q in range(queries.shape[0]):
+                    proportions.append(top_vecs_id[q].shape[0]*100/docs.shape[0])
                 
-                print("Proportion of candidates shortlisted for the query:",top_vecs_id[0].shape[0]*100/docs.shape[0],"%")
+                proportions=np.array(proportions)
+                print("Avg. Proportion of candidates shortlisted for the query:",proportions.mean(),"%")
             
                 recall_centroid=proportion_in_filtered(brute_f_results,top_vecs_id)
                 print(f"(({prov}Binarized centroids) Recall@10 with k-center for TOP C={c} with {l} cluster redundancy:",round(recall_centroid.mean(),3))

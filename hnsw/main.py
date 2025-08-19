@@ -12,8 +12,8 @@ import faiss
 
 # --- PARAMETERS (edit as needed) ---
 NUM_VECS = 10000      # e.g., 1_000, 10_000, 100_000, ...
-D_BITS = 1000           # number of bits per vector (must be multiple of 8; we'll pad if not)
-M = 32                  # HNSW connectivity
+D_BITS = 1024           # number of bits per vector (must be multiple of 8; we'll pad if not)
+M = 16                  # HNSW connectivity
 ef_construction = 400    # exploration during construction
 NUM_QUERIES = 1          # number of queries to test after building index
 # --- END PARAMETERS ---

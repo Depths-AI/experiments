@@ -1,2 +1,2 @@
 provider,num_vecs,vectors sampled,brute time (ms),reduced time (ms),lsh time (ms),reduced vec. recall,lsh recall
-cohere,100000,20000,101.4118,0,46.4287,0,0.88
+cohere,100000,10000,126.6196,0,20.4729,0,0.82

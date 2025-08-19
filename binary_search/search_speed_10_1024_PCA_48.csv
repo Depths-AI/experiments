@@ -1,0 +1,2 @@
+provider,num_vecs,oversample,brute time (ns),reduced time (ns),binary time (ns),reduced vec. recall,binary recall
+openai,100000,500,53618400.0,13439400.0,0.0,0.99,0

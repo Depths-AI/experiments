@@ -1,0 +1,2 @@
+provider,num_vecs,oversample,brute time (us),reduced time (us),binary time (us),reduced vec. recall,binary recall
+cohere,500000,2500,1571107.7,16212.2,31017.1,1.0,0

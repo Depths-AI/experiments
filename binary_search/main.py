@@ -3,20 +3,20 @@ import polars as pl
 import time
 from search import *
 
-NUM_VECS = 20000
+NUM_VECS = 500000
 NUM_QUERIES = 1
 NUM_DIMS=1024
 TOP_K=10
-PCA_FACTOR=0
-OVER_SAMPLE_FACTOR=[i for i in range(5,6,1)]
+PCA_FACTOR=16
+OVER_SAMPLE_FACTOR=[i for i in range(2500,2501,1)]
 CSV_PATH=f"search_speed_{TOP_K}_{NUM_DIMS}_PCA_{PCA_FACTOR}.csv"
 
 PROVIDERS: dict[str, dict[str, object]] = {
-    "openai": {
-        "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
-        "col": "text-embedding-3-large-1536-embedding",
-        "dim": 1536,
-    },
+    # "openai": {
+    #     "path": "openai.parquet", # Download and rename the first file from huggingface link in the article/ README
+    #     "col": "text-embedding-3-large-1536-embedding",
+    #     "dim": 1536,
+    # },
     "cohere": {
         "path": "cohere_v3.parquet", # Download and rename the first file from huggingface link in the article/ README
         "col": "emb",
@@ -160,7 +160,7 @@ def main():
         start_time=time.time_ns()
         idxs = vector_search(queries, docs, TOP_K)
         end_time=time.time_ns()
-        bfs_time=(end_time-start_time)*1.0
+        bfs_time=(end_time-start_time)*1.0/1e3
         times.extend([bfs_time]*len(OVER_SAMPLE_FACTOR))
 
         for o in OVER_SAMPLE_FACTOR:
@@ -171,23 +171,23 @@ def main():
             start_time=time.time_ns()
             b_idxs, b_dists = binary_vector_search(queries_b, docs_b, TOP_K*o)
             end_time=time.time_ns()
-            b_times.append((end_time-start_time)*1.0)
-            print(b_dists)
+            b_times.append((end_time-start_time)*1.0/1e3)
 
             if PCA_FACTOR>0:
                 start_time=time.time_ns()
                 r_idxs=vector_search(queries_r, docs_r,TOP_K*o)
                 end_time=time.time_ns()
-                r_times.append((end_time-start_time)*1.0)
+                r_times.append((end_time-start_time)*1.0/1e3)
                 r=recall_at_k(idxs, r_idxs)
                 r_recall.append(r)
+                print(f"PCA Recall with {o}x oversample @top{TOP_K} for {prov}: {r}")
             else:
                 r_times.append(0)
                 r_recall.append(0)
         
             r=recall_at_k(idxs, b_idxs)
-            print(f"Recall at {TOP_K*o} for {prov}: {r}")
-            recall.append(r)
+            print(f"Binary Recall with {o}x oversample @top{TOP_K} for {prov}: {r}")
+            recall.append(0)
 
             
         print("Done with",prov)
@@ -196,9 +196,9 @@ def main():
         "provider": providers,
         "num_vecs": num_vecs,
         "oversample": o_sample,
-        "brute time (ns)": times,
-        "reduced time (ns)":r_times,
-        "binary time (ns)": b_times,
+        "brute time (us)": times,
+        "reduced time (us)":r_times,
+        "binary time (us)": b_times,
         "reduced vec. recall":r_recall,
         "binary recall": recall}).write_csv(CSV_PATH)
 
