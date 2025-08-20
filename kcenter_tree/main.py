@@ -15,12 +15,12 @@ from typing import Dict, Any
 # ---- Match your existing constants & provider map ----
 NUM_VECS = 32760
 CHUNK_SIZE = 32760
-NUM_QUERIES = 1           # feel free to change to 1 to mirror your current run
-TOP_K = 25
-K1 = 1024                   # coarse
-K2 = 8192                   # fine
-P1 = 512                    # top-L1
-P2 = 512                    # top-L2
+NUM_QUERIES = 1000          # feel free to change to 1 to mirror your current run
+TOP_K = 10
+K1 = 256                   # coarse
+K2 = 2048                   # fine
+P1 = 12                    # top-L1
+P2 = 96                    # top-L2
 
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "openai": {
@@ -72,16 +72,16 @@ def run_provider(prov: str, meta: Dict[str, Any]):
 
     # 5) Search via conditional probing
     t2 = time.time()
-    filtered_lists = two_layer_candidates_batch(queries_b, index, p1=P1, p2=P2, enforce_and=True)
+    filtered_lists = two_layer_candidates_batch(queries_b, index, p1=P1, p2=P2, enforce_and=False)
     t3 = time.time()
     print(f"Search time (Q={NUM_QUERIES}, P1={P1}, P2={P2}): {t3 - t2:.3f}s")
 
     # 6) Metrics: candidate % and recall@K wrt brute force
     cand_props = np.array([len(ids) * 100.0 / NUM_VECS for ids in filtered_lists])
-    print(f"Candidate share: {cand_props.mean():.2f}% , p50={np.quantile(cand_props, 0.5):.2f}%, p05={np.quantile(cand_props, 0.05):.2f}%, p95={np.quantile(cand_props, 0.95):.2f}%")
+    print(f"Candidate share: {cand_props.mean():.2f}% , p50={np.quantile(cand_props, 0.5):.2f}%, p10={np.quantile(cand_props, 0.10):.2f}%, p95={np.quantile(cand_props, 0.95):.2f}%")
 
     recall = proportion_in_filtered(brute_idx, filtered_lists)  # (Q,) ∈ [0,1]  # :contentReference[oaicite:14]{index=14}
-    print(f"Recall@{TOP_K}: mean={recall.mean():.3f}, p50={np.quantile(recall,0.5):.3f}, p05={np.quantile(recall,0.05):.3f}, p95={np.quantile(recall,0.95):.3f}")
+    print(f"Recall@{TOP_K}: mean={recall.mean():.3f}, p50={np.quantile(recall,0.5):.3f}, p10={np.quantile(recall,0.10):.3f}, p95={np.quantile(recall,0.95):.3f}")
     
     # print(np.sort(recall)[:NUM_QUERIES//2])  # sorted recall for debugging
 def main():
