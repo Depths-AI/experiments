@@ -5,12 +5,12 @@ import time
 
 NUM_VECS=32760
 CHUNK_SIZE=32760
-NUM_QUERIES=100
+NUM_QUERIES=1
 K=1024
-TOP_C=32
-MAX_C=32
+TOP_C=256
+MAX_C=256
 OVERSAMPLE_FACTOR=5
-L=[i for i in range(5, 6, 2)]  # Cluster redundancy levels
+L=[i for i in range(1, 2, 2)]  # Cluster redundancy levels
 TOP_K=10
 NUM_DIMS=1024
 PROVIDERS: dict[str, dict[str, object]] = {
@@ -92,8 +92,12 @@ def main():
             
 
             for c in range(TOP_C, MAX_C+1, TOP_C):
+                start=time.time()
                 closest_centroids=binary_vector_search(queries_b,centroids,c)
-                _, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids)
+                _, top_vecs_id=filter_docs_by_query(docs,labels,closest_centroids) # bottleneck
+                end=time.time()
+                print(f"Time taken for k-center search with {l} cluster redundancy for TOP C={c}: {round(end-start,3)} seconds")
+                
                 proportions=[]
                 for q in range(queries.shape[0]):
                     proportions.append(top_vecs_id[q].shape[0]*100/docs.shape[0])
