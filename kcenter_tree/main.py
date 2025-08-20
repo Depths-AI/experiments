@@ -17,11 +17,11 @@ NUM_VECS = 32760
 CHUNK_SIZE = 32760
 NUM_QUERIES = 1000          # feel free to change to 1 to mirror your current run
 TOP_K = 10
-K1 = 256                   # coarse
+K1 = 512                   # coarse
 K2 = 2048                   # fine
-P1 = 12                    # top-L1
-P2 = 96                    # top-L2
-
+P1 = 32                    # top-L1
+P2 = 128                    # top-L2
+ENFORCE_AND = False  # enforce AND condition in probing
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "openai": {
         "path": "openai.parquet",
@@ -72,7 +72,7 @@ def run_provider(prov: str, meta: Dict[str, Any]):
 
     # 5) Search via conditional probing
     t2 = time.time()
-    filtered_lists = two_layer_candidates_batch(queries_b, index, p1=P1, p2=P2, enforce_and=False)
+    filtered_lists = two_layer_candidates_batch(queries_b, index, p1=P1, p2=P2, enforce_and=ENFORCE_AND)
     t3 = time.time()
     print(f"Search time (Q={NUM_QUERIES}, P1={P1}, P2={P2}): {t3 - t2:.3f}s")
 
