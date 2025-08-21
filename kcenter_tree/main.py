@@ -10,12 +10,12 @@ from auxil import load_embeddings, vector_search, proportion_in_filtered, plot_s
 # -------- config --------
 NUM_VECS = 32760
 NUM_QUERIES = 100
-TOP_K = 10
+TOP_K = 5
 
 # global L1/L2
-K1 = 512
+K1 = 1024
 K2 = 8192
-P1 = 16
+P1 = 32
 P2 = 64
 ENFORCE_AND = False  # OR by default
 

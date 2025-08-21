@@ -7,8 +7,7 @@ from numba import njit, prange
 @njit(parallel=True, nogil=True, cache=True)
 def pack_signs_to_uint64(proj: np.ndarray) -> np.ndarray:
     """
-    proj: (N, D) float32
-    return: bit-packed (N, ceil(D/64)) uint64
+    proj: (N, D) float32 -> bit-packed (N, ceil(D/64)) uint64
     """
     n, d = proj.shape
     w = (d + 63) // 64
@@ -36,44 +35,97 @@ def _ham_row(a: np.ndarray, b: np.ndarray) -> np.int32:
         s += int(popcount_u64(a[w] ^ b[w]))
     return np.int32(s)
 
+# ---------- top-p by size-p max-heap (O(K log p)) ----------
+
 @njit(nogil=True)
-def _insort_i32(keys: np.ndarray, vals: np.ndarray):
-    L = keys.shape[0]
-    for i in range(1, L):
-        key = keys[i]; val = vals[i]
-        j = i - 1
-        while j >= 0 and keys[j] > key:
-            keys[j + 1] = keys[j]; vals[j + 1] = vals[j]
-            j -= 1
-        keys[j + 1] = key; vals[j + 1] = val
+def _sift_down(vals: np.ndarray, ids: np.ndarray, i: int, size: int):
+    # max-heap by vals
+    while True:
+        l = 2 * i + 1
+        r = l + 1
+        m = i
+        if l < size and vals[l] > vals[m]:
+            m = l
+        if r < size and vals[r] > vals[m]:
+            m = r
+        if m == i:
+            break
+        v = vals[i]; vals[i] = vals[m]; vals[m] = v
+        t = ids[i];  ids[i]  = ids[m];  ids[m]  = t
+        i = m
 
 @njit(nogil=True)
 def hamming_top_p_centers(q_code: np.ndarray, centers_codes: np.ndarray, p: int) -> np.ndarray:
+    """
+    Return indices of the p nearest centers to q_code (by Hamming).
+    Uses a size-p max-heap: O(K log p). Output sorted by distance (asc).
+    """
     K = centers_codes.shape[0]
+    if K == 0 or p <= 0:
+        return np.empty(0, dtype=np.int32)
     if p > K: p = K
-    d = np.empty(K, dtype=np.int32)
-    idx = np.empty(K, dtype=np.int32)
-    for k in range(K):
-        d[k] = _ham_row(q_code, centers_codes[k])
-        idx[k] = k
-    _insort_i32(d, idx)
+
+    heap_vals = np.empty(p, dtype=np.int32)
+    heap_ids  = np.empty(p, dtype=np.int32)
+
+    # seed heap with first p
+    for i in range(p):
+        heap_vals[i] = _ham_row(q_code, centers_codes[i])
+        heap_ids[i]  = i
+    # heapify
+    for i in range(p // 2 - 1, -1, -1):
+        _sift_down(heap_vals, heap_ids, i, p)
+
+    # scan remainder
+    for k in range(p, K):
+        d = _ham_row(q_code, centers_codes[k])
+        if d < heap_vals[0]:
+            heap_vals[0] = d
+            heap_ids[0]  = k
+            _sift_down(heap_vals, heap_ids, 0, p)
+
+    # order heap by distance asc
+    order = np.argsort(heap_vals)
     out = np.empty(p, dtype=np.int32)
-    for i in range(p): out[i] = idx[i]
+    for i in range(p):
+        out[i] = heap_ids[order[i]]
     return out
 
 @njit(nogil=True)
 def hamming_top_p_subset(q_code: np.ndarray, centers_codes: np.ndarray, subset_ids: np.ndarray, p: int) -> np.ndarray:
+    """
+    Return p nearest indices from the provided subset_ids.
+    Also heap-based O(m log p) where m=len(subset_ids).
+    """
     m = subset_ids.shape[0]
-    if m == 0: return subset_ids
+    if m == 0 or p <= 0:
+        return np.empty(0, dtype=np.int32)
     if p > m: p = m
-    d = np.empty(m, dtype=np.int32)
-    idx = np.empty(m, dtype=np.int32)
-    for t in range(m):
+
+    heap_vals = np.empty(p, dtype=np.int32)
+    heap_ids  = np.empty(p, dtype=np.int32)
+
+    # seed from first p subset entries
+    for i in range(p):
+        cid = int(subset_ids[i])
+        heap_vals[i] = _ham_row(q_code, centers_codes[cid])
+        heap_ids[i]  = cid
+    for i in range(p // 2 - 1, -1, -1):
+        _sift_down(heap_vals, heap_ids, i, p)
+
+    # scan the rest
+    for t in range(p, m):
         cid = int(subset_ids[t])
-        d[t] = _ham_row(q_code, centers_codes[cid]); idx[t] = t
-    _insort_i32(d, idx)
+        d = _ham_row(q_code, centers_codes[cid])
+        if d < heap_vals[0]:
+            heap_vals[0] = d
+            heap_ids[0]  = cid
+            _sift_down(heap_vals, heap_ids, 0, p)
+
+    order = np.argsort(heap_vals)
     out = np.empty(p, dtype=np.int32)
-    for i in range(p): out[i] = subset_ids[idx[i]]
+    for i in range(p):
+        out[i] = heap_ids[order[i]]
     return out
 
 # ---------- float -> binary (random orthonormal) ----------
@@ -83,7 +135,7 @@ def binary_quantize_batch(x: np.ndarray, Q: np.ndarray | None = None) -> np.ndar
     x: (N,D) float32; Q: (D,D) orthonormal (if None, random via QR)
     return: bit-packed uint64 codes
     """
-    N, D = x.shape
+    _, D = x.shape
     if Q is None:
         rng = np.random.default_rng(0)
         A = rng.standard_normal((D, D), dtype=np.float32)

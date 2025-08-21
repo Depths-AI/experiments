@@ -9,9 +9,8 @@ IDX_DTYPE = np.int16   # shard < 2^15-1
 OFF_DTYPE = np.int32
 
 # --------- Greedy farthest-first k-center (Hamming) ---------
-# Gonzalez farthest-first is a 2-approx for k-center in metrics; great practical primitive. :contentReference[oaicite:2]{index=2}
 
-@njit(nogil=True)
+@njit(nogil=True, cache=True)
 def ham_greedy_kcenter_indices(codes: np.ndarray, K: int, start_index: int = 0) -> np.ndarray:
     N = codes.shape[0]
     if K <= 0: return np.empty(0, dtype=np.int32)
@@ -36,7 +35,7 @@ def ham_greedy_kcenter_indices(codes: np.ndarray, K: int, start_index: int = 0) 
             if d < mind[i]: mind[i] = d
     return centers
 
-@njit(parallel=True, nogil=True)
+@njit(parallel=True, nogil=True, cache=True)
 def ham_assign_top1_to_centers(codes: np.ndarray, centers_idx: np.ndarray) -> np.ndarray:
     N = codes.shape[0]; K = centers_idx.shape[0]
     out = np.empty(N, dtype=IDX_DTYPE)
@@ -64,25 +63,51 @@ def _csr_from_labels(labels: np.ndarray, K: int) -> tuple[np.ndarray, np.ndarray
         mem[p] = np.int16(i); cur[k] = p + 1
     return offs, mem
 
-def _adj12_csr_from_postings(A2_pos: np.ndarray, l1_offsets: np.ndarray, l1_members: np.ndarray, k1: int, k2: int) -> tuple[np.ndarray, np.ndarray]:
-    # first pass sizes
+@njit(nogil=True, cache=True)
+def _adj12_csr_from_postings_ts(A2_pos: np.ndarray,
+                                l1_offsets: np.ndarray,
+                                l1_members: np.ndarray,
+                                k1: int, k2: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build adjacency with a timestamped visited array (no np.unique).
+    For each coarse c1, collect unique A2 labels seen under its members.
+    """
     sizes = np.zeros(k1, dtype=OFF_DTYPE)
+    visited = np.zeros(k2, dtype=np.int32)
+    stamp = 1
+
+    # pass 1: count uniques per c1
     for c1 in range(k1):
-        s, e = int(l1_offsets[c1]), int(l1_offsets[c1+1])
-        if e > s:
-            a2 = A2_pos[l1_members[s:e]].astype(np.int32, copy=False)
-            sizes[c1] = np.int32(np.unique(a2).shape[0])
-    offs = np.empty(k1 + 1, dtype=OFF_DTYPE); offs[0] = 0
-    for c1 in range(k1): offs[c1+1] = offs[c1] + sizes[c1]
+        s = int(l1_offsets[c1]); e = int(l1_offsets[c1+1])
+        cnt = 0
+        for i in range(s, e):
+            c2 = int(A2_pos[int(l1_members[i])])
+            if visited[c2] != stamp:
+                visited[c2] = stamp
+                cnt += 1
+        sizes[c1] = cnt
+        stamp += 1
+
+    # prefix
+    offs = np.empty(k1 + 1, dtype=OFF_DTYPE)
+    offs[0] = 0
+    for c1 in range(k1):
+        offs[c1+1] = offs[c1] + sizes[c1]
+
+    # pass 2: fill indices (unsorted; order not required)
     idx = np.empty(int(offs[-1]), dtype=IDX_DTYPE)
-    # fill
+    visited[:] = 0; stamp = 1
     for c1 in range(k1):
-        s, e = int(l1_offsets[c1]), int(l1_offsets[c1+1])
-        if e <= s: continue
-        a2 = A2_pos[l1_members[s:e]].astype(np.int32, copy=False)
-        u = np.unique(a2)
+        s = int(l1_offsets[c1]); e = int(l1_offsets[c1+1])
         pos = offs[c1]
-        idx[pos:pos+u.shape[0]] = u.astype(IDX_DTYPE)
+        for i in range(s, e):
+            c2 = int(A2_pos[int(l1_members[i])])
+            if visited[c2] != stamp:
+                visited[c2] = stamp
+                idx[pos] = np.int16(c2)
+                pos += 1
+        stamp += 1
+
     return offs, idx
 
 # --------- Build: global L1, global L2, adjacency ---------
@@ -106,14 +131,14 @@ def build_two_layer_index(
     l1_offsets, l1_members = _csr_from_labels(A1_pos.astype(np.int32), k1)
 
     # L2
-    c2_idx = ham_greedy_kcenter_indices(codes_u64, int(min(k2, N)), start_index_l2)
-    A2_pos = ham_assign_top1_to_centers(codes_u64, c2_idx)          # in [0..k2-1]
+    k2_eff = int(min(k2, N))
+    c2_idx = ham_greedy_kcenter_indices(codes_u64, k2_eff, start_index_l2)
+    A2_pos = ham_assign_top1_to_centers(codes_u64, c2_idx)          # in [0..k2_eff-1]
     C2_codes = codes_u64[c2_idx.astype(np.int32)].copy()
-    l2_offsets, l2_members = _csr_from_labels(A2_pos.astype(np.int32), int(min(k2, N)))
-    k2_eff = int(C2_codes.shape[0])
+    l2_offsets, l2_members = _csr_from_labels(A2_pos.astype(np.int32), k2_eff)
 
-    # adjacency (CSR)
-    adj12_offsets, adj12_indices = _adj12_csr_from_postings(
+    # adjacency (CSR) via timestamps
+    adj12_offsets, adj12_indices = _adj12_csr_from_postings_ts(
         A2_pos.astype(np.int32), l1_offsets, l1_members, int(k1), k2_eff
     )
 
@@ -126,7 +151,71 @@ def build_two_layer_index(
         "k1": int(k1), "k2": k2_eff, "N": np.int32(N),
     }
 
-# --------- Candidate generation (OR/AND) ---------
+# --------- Query-time helpers (timestamps; no uniques/masks clears) ---------
+
+@njit(nogil=True, cache=True)
+def _gather_adj_subset_ts(S1: np.ndarray, adj_offs: np.ndarray, adj_idx: np.ndarray, k2: int) -> np.ndarray:
+    visited = np.zeros(k2, dtype=np.int32)
+    out = np.empty(k2, dtype=np.int32)  # worst case
+    stamp = 1; pos = 0
+    for t in range(S1.shape[0]):
+        c1 = int(S1[t])
+        s = int(adj_offs[c1]); e = int(adj_offs[c1+1])
+        for j in range(s, e):
+            c2 = int(adj_idx[j])
+            if visited[c2] != stamp:
+                visited[c2] = stamp
+                out[pos] = c2; pos += 1
+    return out[:pos]
+
+@njit(nogil=True, cache=True)
+def _materialize_or_ts(S1: np.ndarray, S2: np.ndarray,
+                       l1_off: np.ndarray, l1_mem: np.ndarray,
+                       l2_off: np.ndarray, l2_mem: np.ndarray,
+                       N: int) -> np.ndarray:
+    visited = np.zeros(N, dtype=np.int32)
+    out = np.empty(N, dtype=np.int32)
+    stamp = 1; pos = 0
+    # L1 union
+    for t in range(S1.shape[0]):
+        c1 = int(S1[t]); s = int(l1_off[c1]); e = int(l1_off[c1+1])
+        for i in range(s, e):
+            did = int(l1_mem[i])
+            if visited[did] != stamp:
+                visited[did] = stamp; out[pos] = did; pos += 1
+    # L2 union
+    for t in range(S2.shape[0]):
+        c2 = int(S2[t]); s = int(l2_off[c2]); e = int(l2_off[c2+1])
+        for i in range(s, e):
+            did = int(l2_mem[i])
+            if visited[did] != stamp:
+                visited[did] = stamp; out[pos] = did; pos += 1
+    return out[:pos]
+
+@njit(nogil=True, cache=True)
+def _materialize_and_ts(S1: np.ndarray, S2: np.ndarray,
+                        l1_off: np.ndarray, l1_mem: np.ndarray,
+                        A2_pos: np.ndarray, k2: int, N: int) -> np.ndarray:
+    if S2.shape[0] == 0 or S1.shape[0] == 0:
+        return np.empty(0, dtype=np.int32)
+    s2mark = np.zeros(k2, dtype=np.int32)
+    for t in range(S2.shape[0]):
+        s2mark[int(S2[t])] = 1
+    visited = np.zeros(N, dtype=np.int32)
+    out = np.empty(N, dtype=np.int32)
+    stamp = 1; pos = 0
+    for t in range(S1.shape[0]):
+        c1 = int(S1[t]); s = int(l1_off[c1]); e = int(l1_off[c1+1])
+        for i in range(s, e):
+            did = int(l1_mem[i])
+            if visited[did] == stamp:  # already added
+                continue
+            if s2mark[int(A2_pos[did])] == 1:
+                visited[did] = stamp
+                out[pos] = did; pos += 1
+    return out[:pos]
+
+# --------- Candidate generation (public API unchanged) ---------
 
 def _adj_slice(adj_offs: np.ndarray, adj_idx: np.ndarray, c1: int) -> np.ndarray:
     s, e = int(adj_offs[c1]), int(adj_offs[c1+1])
@@ -146,49 +235,20 @@ def two_layer_candidates_for_query(
     A2_pos = index["A2_pos"]
     a_off  = index["adj12_offsets"]; a_idx = index["adj12_indices"]
 
-    # L1 probe
+    # L1 probe (heap)
     S1 = hamming_top_p_centers(q_code, C1, p1)
 
-    # adjacency-restricted L2 subset
-    if S1.size:
-        counts = 0
-        for c1 in S1: counts += int(a_off[int(c1)+1] - a_off[int(c1)])
-        buf = np.empty(counts, dtype=np.int32); pos = 0
-        for c1 in S1:
-            sl = _adj_slice(a_off, a_idx, int(c1))
-            L = sl.shape[0]
-            if L: buf[pos:pos+L] = sl.astype(np.int32); pos += L
-        S2_subset = np.unique(buf[:pos]) if pos else np.empty(0, dtype=np.int32)
-    else:
-        S2_subset = np.empty(0, dtype=np.int32)
+    # adjacency-restricted L2 subset (timestamps, no unique)
+    S2_subset = _gather_adj_subset_ts(S1, a_off, a_idx, k2) if S1.size else np.empty(0, dtype=np.int32)
 
-    # L2 probe
+    # L2 probe (heap)
     S2 = hamming_top_p_subset(q_code, C2, S2_subset, p2) if S2_subset.size else np.empty(0, dtype=np.int32)
 
     # Materialize
     if not enforce_and:
-        mask = np.zeros(N, dtype=bool)
-        # OR over L1 postings
-        for c1 in S1:
-            s, e = int(l1_off[int(c1)]), int(l1_off[int(c1)+1])
-            if e > s: mask[l1_mem[s:e]] = True
-        # OR over L2 postings
-        for c2 in S2:
-            s, e = int(l2_off[int(c2)]), int(l2_off[int(c2)+1])
-            if e > s: mask[l2_mem[s:e]] = True
-        return np.nonzero(mask)[0].astype(np.int32)
+        return _materialize_or_ts(S1, S2, l1_off, l1_mem, l2_off, l2_mem, N).astype(np.int32, copy=False)
     else:
-        # AND: for docs in selected L1 postings, keep only those whose A2 in S2
-        if S2.size == 0: return np.empty(0, dtype=np.int32)
-        s2mask = np.zeros(k2, dtype=bool); s2mask[S2] = True
-        out = []
-        for c1 in S1:
-            s, e = int(l1_off[int(c1)]), int(l1_off[int(c1)+1])
-            if e <= s: continue
-            ids = l1_mem[s:e].astype(np.int32, copy=False)
-            sel = ids[s2mask[A2_pos[ids]]]
-            if sel.size: out.append(sel)
-        return (np.unique(np.concatenate(out)) if out else np.empty(0, dtype=np.int32))
+        return _materialize_and_ts(S1, S2, l1_off, l1_mem, A2_pos, k2, N).astype(np.int32, copy=False)
 
 def two_layer_candidates_batch(
     queries_codes: np.ndarray,
