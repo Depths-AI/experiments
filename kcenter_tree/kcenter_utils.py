@@ -8,6 +8,11 @@ from binary_utils import _ham_row, hamming_top_p_centers, hamming_top_p_subset
 IDX_DTYPE = np.int16   # shard < 2^15-1
 OFF_DTYPE = np.int32
 
+# ---- Tunables for diversification (kept internal; API unchanged) ----
+_DIVERSIFY_ALPHA = 0.8          # fraction of p2 for core picks
+_C2_NEIGHBORS_T = 4             # neighbors per L2 center
+_MAX_EXPAND_PER_CORE = 2        # cap explores per seed core center
+
 # --------- Greedy farthest-first k-center (Hamming) ---------
 
 @njit(nogil=True, cache=True)
@@ -68,10 +73,7 @@ def _adj12_csr_from_postings_ts(A2_pos: np.ndarray,
                                 l1_offsets: np.ndarray,
                                 l1_members: np.ndarray,
                                 k1: int, k2: int) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Build adjacency with a timestamped visited array (no np.unique).
-    For each coarse c1, collect unique A2 labels seen under its members.
-    """
+    """Adjacency L1→(unique) L2 via timestamped visited array (no np.unique)."""
     sizes = np.zeros(k1, dtype=OFF_DTYPE)
     visited = np.zeros(k2, dtype=np.int32)
     stamp = 1
@@ -94,7 +96,7 @@ def _adj12_csr_from_postings_ts(A2_pos: np.ndarray,
     for c1 in range(k1):
         offs[c1+1] = offs[c1] + sizes[c1]
 
-    # pass 2: fill indices (unsorted; order not required)
+    # pass 2: fill indices
     idx = np.empty(int(offs[-1]), dtype=IDX_DTYPE)
     visited[:] = 0; stamp = 1
     for c1 in range(k1):
@@ -110,7 +112,31 @@ def _adj12_csr_from_postings_ts(A2_pos: np.ndarray,
 
     return offs, idx
 
-# --------- Build: global L1, global L2, adjacency ---------
+# --------- C2→C2 neighbor list for diversified probing ---------
+
+@njit(nogil=True, cache=True)
+def _build_c2_neighbors(C2_codes: np.ndarray, T: int) -> np.ndarray:
+    """
+    For each L2 center i, keep its T nearest L2 centers by Hamming
+    (excluding self). Uses existing heap-based hamming_top_p_centers.
+    """
+    k2 = C2_codes.shape[0]
+    out = np.empty((k2, T), dtype=IDX_DTYPE)
+    for i in range(k2):
+        # nearest T+1 will always include 'i' at distance 0
+        top = hamming_top_p_centers(C2_codes[i], C2_codes, T + 1)
+        pos = 0
+        for j in range(top.shape[0]):
+            cid = int(top[j])
+            if cid == i: 
+                continue
+            out[i, pos] = np.int16(cid)
+            pos += 1
+            if pos == T:
+                break
+    return out
+
+# --------- Build: global L1, global L2, adjacency (+ C2_nn) ---------
 
 def build_two_layer_index(
     codes_u64: np.ndarray,
@@ -120,27 +146,32 @@ def build_two_layer_index(
     start_index_l2: int = 0,
 ) -> Dict[str, object]:
     """
-    Global L1 + Global L2 (both k-center on bit codes). Adjacency maps each coarse center
-    to the set of fine centers seen under its posting list (unique A2 labels of its members).
+    Global L1 + Global L2 (both k-center on bit codes).
+    Adjacency maps each coarse center to the set of fine centers seen under its members.
+    Also builds a small C2→C2 neighbor list for multi-probe diversification.
     """
     N = codes_u64.shape[0]
+
     # L1
     c1_idx = ham_greedy_kcenter_indices(codes_u64, int(k1), start_index_l1)
-    A1_pos = ham_assign_top1_to_centers(codes_u64, c1_idx)          # in [0..k1-1]
+    A1_pos = ham_assign_top1_to_centers(codes_u64, c1_idx)
     C1_codes = codes_u64[c1_idx.astype(np.int32)].copy()
     l1_offsets, l1_members = _csr_from_labels(A1_pos.astype(np.int32), k1)
 
     # L2
     k2_eff = int(min(k2, N))
     c2_idx = ham_greedy_kcenter_indices(codes_u64, k2_eff, start_index_l2)
-    A2_pos = ham_assign_top1_to_centers(codes_u64, c2_idx)          # in [0..k2_eff-1]
+    A2_pos = ham_assign_top1_to_centers(codes_u64, c2_idx)
     C2_codes = codes_u64[c2_idx.astype(np.int32)].copy()
     l2_offsets, l2_members = _csr_from_labels(A2_pos.astype(np.int32), k2_eff)
 
-    # adjacency (CSR) via timestamps
+    # adjacency (CSR)
     adj12_offsets, adj12_indices = _adj12_csr_from_postings_ts(
         A2_pos.astype(np.int32), l1_offsets, l1_members, int(k1), k2_eff
     )
+
+    # L2→L2 neighbors (tiny; enables diversified probing at same p2)
+    C2_nn = _build_c2_neighbors(C2_codes, _C2_NEIGHBORS_T)
 
     return {
         "C1_codes": C1_codes, "C2_codes": C2_codes,
@@ -148,10 +179,11 @@ def build_two_layer_index(
         "l1_offsets": l1_offsets, "l1_members": l1_members,
         "l2_offsets": l2_offsets, "l2_members": l2_members,
         "adj12_offsets": adj12_offsets, "adj12_indices": adj12_indices,
+        "C2_nn": C2_nn,                        # << new
         "k1": int(k1), "k2": k2_eff, "N": np.int32(N),
     }
 
-# --------- Query-time helpers (timestamps; no uniques/masks clears) ---------
+# --------- Query-time helpers (timestamps; no uniques/mask clears) ---------
 
 @njit(nogil=True, cache=True)
 def _gather_adj_subset_ts(S1: np.ndarray, adj_offs: np.ndarray, adj_idx: np.ndarray, k2: int) -> np.ndarray:
@@ -215,11 +247,82 @@ def _materialize_and_ts(S1: np.ndarray, S2: np.ndarray,
                 out[pos] = did; pos += 1
     return out[:pos]
 
-# --------- Candidate generation (public API unchanged) ---------
+# --------- Diversified L2 selection at fixed p2 (Core + Explore) ---------
 
-def _adj_slice(adj_offs: np.ndarray, adj_idx: np.ndarray, c1: int) -> np.ndarray:
-    s, e = int(adj_offs[c1]), int(adj_offs[c1+1])
-    return adj_idx[s:e]
+@njit(nogil=True, cache=True, boundscheck=True)
+def _diversified_L2(q_code: np.ndarray, C2: np.ndarray, S2_subset: np.ndarray, p2: int,
+                    C2_nn: np.ndarray, alpha: float, max_expand_per_core: int) -> np.ndarray:
+    if S2_subset.shape[0] == 0 or p2 <= 0:
+        return np.empty(0, dtype=np.int32)
+
+    # 1) Core picks
+    p_core = int(alpha * p2)
+    if p_core < 1: p_core = 1
+    if p_core > p2: p_core = p2
+    core = hamming_top_p_subset(q_code, C2, S2_subset, p_core)
+
+    # visited & subset marks
+    k2 = C2.shape[0]
+    visited = np.zeros(k2, dtype=np.int32)
+    for i in range(core.shape[0]): visited[int(core[i])] = 1
+    in_subset = np.zeros(k2, dtype=np.int32)
+    for i in range(S2_subset.shape[0]): in_subset[int(S2_subset[i])] = 1
+
+    # 2) Explore from a few core seeds
+    budget = p2 - p_core
+    explore = np.empty(p2, dtype=np.int32)
+    pos = 0
+    if budget > 0:
+        seeds_to_use = core.shape[0]
+        if max_expand_per_core > 0:
+            # ceil(budget / max_expand_per_core)
+            need = (budget + max_expand_per_core - 1) // max_expand_per_core
+            if need < seeds_to_use: seeds_to_use = need
+        for s in range(seeds_to_use):
+            seed = int(core[s]); taken = 0
+            neigh = C2_nn[seed]
+            for u in range(neigh.shape[0]):
+                if budget == 0: break
+                nb = int(neigh[u])
+                if in_subset[nb] == 0: continue
+                if visited[nb] == 1: continue
+                visited[nb] = 1
+                explore[pos] = nb; pos += 1
+                budget -= 1; taken += 1
+                if max_expand_per_core > 0 and taken >= max_expand_per_core:
+                    break
+            if budget == 0: break
+
+    # 3) Fill any remainder with next best from subset (ignore already picked)
+    if budget > 0:
+        extra = hamming_top_p_subset(q_code, C2, S2_subset, min(S2_subset.shape[0], p2 * 2))
+        for i in range(extra.shape[0]):
+            if budget == 0: break
+            nb = int(extra[i])
+            if visited[nb] == 1: continue
+            visited[nb] = 1
+            explore[pos] = nb; pos += 1
+            budget -= 1
+
+    # concatenate core + explore[:pos] (size <= p2)
+    base = core.shape[0]
+    total = base + pos
+    if total > p2:
+        total = p2
+    out = np.empty(total, dtype=np.int32)
+
+    # copy core
+    for t in range(base):
+        out[t] = int(core[t])
+
+    # copy as many explore as fit
+    fill = total - base
+    for j in range(fill):
+        out[base + j] = int(explore[j])
+
+    return out
+
+# --------- Candidate generation (public API unchanged) ---------
 
 def two_layer_candidates_for_query(
     q_code: np.ndarray,
@@ -234,15 +337,20 @@ def two_layer_candidates_for_query(
     l2_off = index["l2_offsets"]; l2_mem = index["l2_members"]
     A2_pos = index["A2_pos"]
     a_off  = index["adj12_offsets"]; a_idx = index["adj12_indices"]
+    C2_nn  = index.get("C2_nn", None)
 
     # L1 probe (heap)
     S1 = hamming_top_p_centers(q_code, C1, p1)
 
-    # adjacency-restricted L2 subset (timestamps, no unique)
+    # adjacency-restricted L2 subset
     S2_subset = _gather_adj_subset_ts(S1, a_off, a_idx, k2) if S1.size else np.empty(0, dtype=np.int32)
 
-    # L2 probe (heap)
-    S2 = hamming_top_p_subset(q_code, C2, S2_subset, p2) if S2_subset.size else np.empty(0, dtype=np.int32)
+    # L2 probe (Core+Explore under fixed p2)
+    if C2_nn is not None and S2_subset.size:
+        S2 = _diversified_L2(q_code, C2, S2_subset, p2, C2_nn,
+                             float(_DIVERSIFY_ALPHA), int(_MAX_EXPAND_PER_CORE))
+    else:
+        S2 = hamming_top_p_subset(q_code, C2, S2_subset, p2) if S2_subset.size else np.empty(0, dtype=np.int32)
 
     # Materialize
     if not enforce_and:
