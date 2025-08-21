@@ -18,13 +18,13 @@ from kcenter_utils import build_index_localL2
 NUM_VECS = 32760         # shard size < 2^15-1  → int16-safe
 CHUNK_SIZE = 32760
 NUM_QUERIES = 1000
-TOP_K = 1
+TOP_K = 10
 
 # index params (per-L1 local L2)
-K1 = 512                 # coarse centers
-K2_PER_L1 = 8           # fine centers per coarse list
-P1 = 64*int(1+np.log10(TOP_K))                 # L1 probes
-P2 = 256*int(1+np.log10(TOP_K))                  # L2 probes (within selected L1 lists)
+K1 = 256                 # coarse centers
+K2_PER_L1 = 10           # fine centers per coarse list
+P1 = 64              # L1 probes
+P2 = 256              # L2 probes (within selected L1 lists)
 USE_AND = True          # OR mode default
 
 # providers to benchmark (same two as before)
